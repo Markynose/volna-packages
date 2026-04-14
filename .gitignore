@@ -1,0 +1,5 @@
+nginx-access.log
+nginx-error.log
+nginx.pid
+# Private signing key — never commit
+keys/volna-signing.rsa
