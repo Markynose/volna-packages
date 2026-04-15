@@ -1,0 +1,101 @@
+name: Build and deploy Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate-indexes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate directory indexes
+        run: |
+          python3 - <<'EOF'
+          import os, stat
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          SKIP_DIRS = {'.git', '.github'}
+          SKIP_FILES = {'index.html'}
+
+          CSS = """
+          body { font-family: monospace; max-width: 900px; margin: 40px auto; padding: 0 20px; color: #333; }
+          h1 { border-bottom: 1px solid #ccc; padding-bottom: 8px; font-size: 1.1em; }
+          table { width: 100%; border-collapse: collapse; }
+          tr:hover { background: #f5f5f5; }
+          td, th { padding: 4px 12px; text-align: left; }
+          th { border-bottom: 1px solid #ccc; }
+          td.size { text-align: right; color: #666; }
+          td.date { color: #666; }
+          a { text-decoration: none; color: #00f; }
+          a:hover { text-decoration: underline; }
+          .dir { color: #00a; }
+          """
+
+          def fmt_size(n):
+              for unit in ('B', 'K', 'M', 'G'):
+                  if n < 1024:
+                      return f"{n:.0f}{unit}" if unit == 'B' else f"{n:.1f}{unit}"
+                  n /= 1024
+              return f"{n:.1f}T"
+
+          def fmt_date(ts):
+              return datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M')
+
+          def make_index(dirpath, root):
+              entries = []
+              for name in sorted(os.listdir(dirpath)):
+                  if name in SKIP_DIRS or name in SKIP_FILES or name.startswith('.'):
+                      continue
+                  full = os.path.join(dirpath, name)
+                  s = os.stat(full)
+                  is_dir = stat.S_ISDIR(s.st_mode)
+                  entries.append((name, is_dir, s.st_size, s.st_mtime))
+
+              rel = os.path.relpath(dirpath, root)
+              title = '/' + ('' if rel == '.' else rel + '/')
+              parent = '' if rel == '.' else '<tr><td colspan="3"><a href="../">../</a></td></tr>'
+
+              rows = parent
+              for name, is_dir, size, mtime in entries:
+                  href = name + ('/' if is_dir else '')
+                  label = f'<span class="dir">{href}</span>' if is_dir else href
+                  sz = '-' if is_dir else fmt_size(size)
+                  rows += f'<tr><td><a href="{href}">{label}</a></td><td class="date">{fmt_date(mtime)}</td><td class="size">{sz}</td></tr>\n'
+
+              html = f"""<!DOCTYPE html>
+          <html><head><meta charset="utf-8"><title>Index of {title}</title>
+          <style>{CSS}</style></head>
+          <body>
+          <h1>Index of {title}</h1>
+          <table>
+          <tr><th>Name</th><th>Date</th><th>Size</th></tr>
+          {rows}
+          </table>
+          </body></html>"""
+
+              out = os.path.join(dirpath, 'index.html')
+              with open(out, 'w') as f:
+                  f.write(html)
+              print(f"  wrote {out}")
+
+          root = '.'
+          for dirpath, dirnames, _ in os.walk(root):
+              dirnames[:] = [d for d in sorted(dirnames) if d not in SKIP_DIRS and not d.startswith('.')]
+              make_index(dirpath, root)
+
+          EOF
+
+      - name: Commit indexes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "chore: regenerate directory indexes"
+          git push
